@@ -1,0 +1,10 @@
+{
+  "name": "myind-plugin",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Myind plugin for Claude Code: the worker and its tests. No dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test \"tools/worker/*.test.mjs\"" }
+}

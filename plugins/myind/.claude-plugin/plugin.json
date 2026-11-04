@@ -1,0 +1,22 @@
+{
+  "name": "myind",
+  "displayName": "Myind",
+  "version": "0.4.0",
+  "description": "Process the links and files your phone queued in your private Myind repository, and find what you saved there.",
+  "author": {
+    "name": "Myind AI",
+    "url": "https://github.com/myind-ai"
+  },
+  "license": "MIT",
+  "keywords": [
+    "myind",
+    "second-brain",
+    "learning",
+    "transcript",
+    "whisper",
+    "notes",
+    "github"
+  ],
+  "homepage": "https://github.com/myind-ai/myind-plugin",
+  "repository": "https://github.com/myind-ai/myind-plugin"
+}

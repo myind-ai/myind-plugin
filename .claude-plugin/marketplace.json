@@ -1,0 +1,12 @@
+{
+  "name": "myind",
+  "description": "The Myind computer worker and its Claude Code skills.",
+  "owner": { "name": "Myind AI", "url": "https://github.com/myind-ai" },
+  "plugins": [
+    {
+      "name": "myind",
+      "source": "./plugins/myind",
+      "description": "Read what your phone saved to your private Myind repository (videos, recordings, pages, PDFs) into notes, lessons and topics."
+    }
+  ]
+}
