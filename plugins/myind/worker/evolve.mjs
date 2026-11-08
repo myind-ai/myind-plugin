@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { askClaude, wrap } from './claude.mjs'
+import { setUsageLabel } from './usage.mjs'
 import { loadConfig, resolveTools, takeLock } from './config.mjs'
 import { commitPaths, hasCommits, pullRebase, syncAndPush } from './gitops.mjs'
 import { listItems } from './library.mjs'
@@ -87,6 +88,7 @@ export function checkTopicReply(text, refs) {
 }
 
 async function writeWithClaude(tools, cfg, topic) {
+	setUsageLabel({ title: topic.tag, kind: 'topic' })
 	let body = topic.page.body
 	const byRef = new Map(topic.items.map((it) => [refOf(it), it]))
 	for (const group of batches(topic.page.exists ? topic.fresh : topic.items)) {

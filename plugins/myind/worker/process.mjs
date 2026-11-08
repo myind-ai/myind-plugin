@@ -3,6 +3,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { readWithClaude } from './claude.mjs'
+import { setUsageLabel } from './usage.mjs'
 import { processedByFor } from './llm.mjs'
 import { commitPaths, git } from './gitops.mjs'
 import { filesIn, findItem, relatedIds } from './library.mjs'
@@ -169,9 +170,11 @@ export async function processParsed(ctx, job, { gathered: given } = {}) {
 		return { status: 'kept', title: old.learning.title }
 	}
 	const route = job.kind === 'link' ? routeLink(job.normal) : { how: 'file', type: 'file' }
+	setUsageLabel({ id: job.id, title: job.title || job.normal || job.id, kind: route.how === 'file' ? 'file' : 'learn' })
 	const gathered = given ?? (route.how === 'video' ? await gatherVideo(ctx, job, route) : route.how === 'page' ? await gatherPage(ctx, job) : await gatherFile(ctx, job))
 	for (const problem of gathered.problems) ctx.warn(`${job.id}: ${oneLine(problem)}`)
 	const title = job.title || gathered.title || job.normal || job.id
+	setUsageLabel({ id: job.id, title, kind: 'learn' })
 	const sourceUrl = job.normal ?? null
 	const { body, quality, processedBy } = await learnFrom(ctx, job, gathered, title, sourceUrl)
 	// --force may redo a full item, but a failed read must not take away what's there.

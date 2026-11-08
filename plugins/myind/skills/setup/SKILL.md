@@ -143,6 +143,13 @@ On macOS it writes `~/Library/LaunchAgents/com.myind.worker.plist` and loads it;
 
 To stop it: `node "$W" uninstall-service`. To only see the launchd file: `node "$W" launchd-plist` (prints, installs nothing).
 
+### Weekly report (ask first)
+
+Ask once, with the background question or after it: "Remind you once a week where the Claude tokens went and what
+waits for your words?" Only on yes: `node "$W" install-reminder` (Monday 10:00; `--weekday 0-6 --hour 0-23`). It runs
+`report --write --notify` from the same copy in `~/.myind/worker/`, so rerun it after a plugin update too. To save tokens
+on short captions, offer to set `"smallModel": "sonnet"` (or `"haiku"`) in `~/.myind/worker.json`.
+
 ## 8. Summary
 
 Four or five lines: the repository and branch, where the clone is, how many videos wait for words, whether it runs in

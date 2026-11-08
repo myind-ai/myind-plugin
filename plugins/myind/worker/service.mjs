@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configPath, homeDir, loadConfig, resolveTools } from './config.mjs'
-import { oneLine, run, which } from './util.mjs'
+import { oneLine, run, sleep, which } from './util.mjs'
 
 export const LABEL = 'com.myind.worker'
 export const UNIT = 'myind-worker.service'
@@ -106,18 +106,32 @@ async function must(cmd, args) {
 	return res
 }
 
+/**
+ * (Re)loads a launch agent and proves launchd has it. `bootout` returns before a running job has stopped; a `bootstrap`
+ * sent then fails, and the old `load -w` fallback exits 0 doing nothing, so a reinstall left the worker unloaded
+ * (seen 2026-11-09). So: wait until `print` no longer finds the old job, bootstrap, then `print` must find the new one.
+ */
+async function reloadAgent(label, file) {
+	const target = `gui/${process.getuid()}/${label}`
+	await run(launchctl(), ['bootout', target]) // fine when none is loaded
+	const until = Date.now() + 15_000
+	while ((await run(launchctl(), ['print', target])).code === 0 && Date.now() < until) await sleep(250)
+	let res = { code: 1 }
+	for (let attempt = 0; attempt < 5 && res.code !== 0; attempt++) {
+		if (attempt) await sleep(1000)
+		res = await run(launchctl(), ['bootstrap', `gui/${process.getuid()}`, file])
+	}
+	if ((await run(launchctl(), ['print', target])).code !== 0) throw new Error(`launchd did not load ${label}: ${oneLine(res.stderr || res.stdout || `bootstrap exit ${res.code}`)}. Try: launchctl bootstrap gui/${process.getuid()} ${file}`)
+}
+
 /** Writes the service file and, unless `load` is false, loads it. Resolves with what was done. */
 export async function installService({ platform = process.platform, every = 300, workpulse = false, load = true } = {}) {
 	const file = serviceFile(platform)
 	const workerPath = copyWorker()
 	mkdirSync(dirname(file), { recursive: true })
 	writeFileSync(file, platform === 'darwin' ? launchdPlist(workerPath, { every, workpulse }) : systemdUnit(workerPath, { every, workpulse }))
-	if (load && platform === 'darwin') {
-		const domain = `gui/${process.getuid()}`
-		await run(launchctl(), ['bootout', `${domain}/${LABEL}`]) // an older copy, if one is loaded; fine when none is
-		const res = await run(launchctl(), ['bootstrap', domain, file])
-		if (res.code !== 0) await must(launchctl(), ['load', '-w', file])
-	} else if (load) {
+	if (load && platform === 'darwin') await reloadAgent(LABEL, file)
+	else if (load) {
 		await must(systemctl(), ['--user', 'daemon-reload'])
 		await must(systemctl(), ['--user', 'enable', '--now', UNIT])
 	}
@@ -132,6 +146,100 @@ export async function uninstallService({ platform = process.platform, load = tru
 	else if (load) await run(systemctl(), ['--user', 'disable', '--now', UNIT])
 	rmSync(file, { force: true })
 	if (load && platform === 'linux') await run(systemctl(), ['--user', 'daemon-reload'])
-	rmSync(join(homeDir(), 'worker'), { recursive: true, force: true })
+	const reminderOn = (() => {
+		try {
+			return reminderFiles(platform).some((f) => existsSync(f))
+		} catch {
+			return false
+		}
+	})()
+	if (!reminderOn) rmSync(join(homeDir(), 'worker'), { recursive: true, force: true }) // the weekly reminder runs that copy too
 	return { file, removed: had }
+}
+
+// The weekly reminder: once a week it runs `report --write --notify` (where the tokens went, what waits for words).
+// A calendar job, not a daemon: nothing runs between reminders. Only installed after the user said yes.
+export const REMINDER_LABEL = 'com.myind.weekly'
+export const REMINDER_UNIT = 'myind-weekly'
+const reportArgs = (workerPath) => [process.execPath, workerPath, 'report', '--days', '7', '--write', '--notify']
+
+export function reminderPlist(workerPath, { weekday = 1, hour = 10, path } = {}) {
+	const log = join(homeDir(), 'worker.log')
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>${REMINDER_LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+${reportArgs(workerPath).map((a) => `		<string>${xml(a)}</string>`).join('\n')}
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>${xml(path ?? servicePath())}</string>
+	</dict>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Weekday</key>
+		<integer>${Number(weekday)}</integer>
+		<key>Hour</key>
+		<integer>${Number(hour)}</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>${xml(log)}</string>
+	<key>StandardErrorPath</key>
+	<string>${xml(log)}</string>
+</dict>
+</plist>
+`
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+export function reminderUnits(workerPath, { weekday = 1, hour = 10, path } = {}) {
+	return {
+		service: `[Unit]\nDescription=Myind weekly report\n\n[Service]\nType=oneshot\nExecStart=${reportArgs(workerPath).map(sdQuote).join(' ')}\nEnvironment=${sdQuote(`PATH=${path ?? servicePath()}`)}\n`,
+		timer: `[Unit]\nDescription=Myind weekly report\n\n[Timer]\nOnCalendar=${DAYS[Number(weekday) % 7]} *-*-* ${String(Number(hour)).padStart(2, '0')}:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`,
+	}
+}
+
+function reminderFiles(platform) {
+	if (platform === 'darwin') return [join(homedir(), 'Library', 'LaunchAgents', `${REMINDER_LABEL}.plist`)]
+	if (platform === 'linux') {
+		const dir = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'systemd', 'user')
+		return [join(dir, `${REMINDER_UNIT}.service`), join(dir, `${REMINDER_UNIT}.timer`)]
+	}
+	throw new Error(`the weekly reminder is set up for macOS and Linux only; on ${platform}, run "myind-worker report" yourself`)
+}
+
+export async function installReminder({ platform = process.platform, weekday = 1, hour = 10, load = true } = {}) {
+	if (!(weekday >= 0 && weekday <= 6) || !(hour >= 0 && hour <= 23)) throw new Error('--weekday is 0-6 (0 = Sunday), --hour is 0-23')
+	const files = reminderFiles(platform)
+	const workerPath = copyWorker()
+	mkdirSync(dirname(files[0]), { recursive: true })
+	if (platform === 'darwin') {
+		writeFileSync(files[0], reminderPlist(workerPath, { weekday, hour }))
+		if (load) await reloadAgent(REMINDER_LABEL, files[0])
+	} else {
+		const u = reminderUnits(workerPath, { weekday, hour })
+		writeFileSync(files[0], u.service)
+		writeFileSync(files[1], u.timer)
+		if (load) {
+			await must(systemctl(), ['--user', 'daemon-reload'])
+			await must(systemctl(), ['--user', 'enable', '--now', `${REMINDER_UNIT}.timer`])
+		}
+	}
+	return { files, workerPath, loaded: load, when: `${DAYS[weekday]} ${String(hour).padStart(2, '0')}:00` }
+}
+
+export async function uninstallReminder({ platform = process.platform, load = true } = {}) {
+	const files = reminderFiles(platform)
+	const had = files.some((f) => existsSync(f))
+	if (load && platform === 'darwin') await run(launchctl(), ['bootout', `gui/${process.getuid()}/${REMINDER_LABEL}`])
+	else if (load) await run(systemctl(), ['--user', 'disable', '--now', `${REMINDER_UNIT}.timer`])
+	for (const f of files) rmSync(f, { force: true })
+	return { files, removed: had }
 }

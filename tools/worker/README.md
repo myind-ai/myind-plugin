@@ -82,6 +82,8 @@ node tools/worker/myind-worker.mjs watch --every 300         # the same on a loo
 node tools/worker/myind-worker.mjs evolve                    # update topics/<slug>.md for tags that gained items
 node tools/worker/myind-worker.mjs launchd-plist             # PRINTS a launchd plist; it installs nothing
 node tools/worker/myind-worker.mjs install-service           # writes and loads a launch agent (macOS) or systemd user unit (Linux)
+node tools/worker/myind-worker.mjs report                    # last 7 days: Claude calls, tokens, cost by kind/model/item, and what waits
+node tools/worker/myind-worker.mjs install-reminder          # the report every Monday 10:00 (~/.myind/reports/), with a notification
 node tools/worker/myind-worker.mjs uninstall-service         # stops and removes it
 ```
 

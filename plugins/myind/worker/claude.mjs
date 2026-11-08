@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { homeDir } from './config.mjs'
 import { askOther, llmName } from './llm.mjs'
 import { parseJsonReply, validateLearning } from './schema.mjs'
+import { recordClaudeResult } from './usage.mjs'
 import { oneLine, run } from './util.mjs'
 import { hms } from './vtt.mjs'
 
@@ -40,6 +41,7 @@ export async function askClaude(tools, cfg, prompt) {
 	const res = await run(tools.claude, [...baseArgs(cfg), '--output-format', 'json'], { input: prompt, cwd: emptyCwd(), env: childEnv(), timeoutMs: TIMEOUT_MS })
 	if (res.code !== 0) return { ok: false, error: oneLine(res.stderr || res.stdout || 'claude failed') }
 	const outer = parseJsonReply(res.stdout)
+	if (outer) recordClaudeResult(outer, { chars: prompt.length })
 	if (!outer || outer.is_error || typeof outer.result !== 'string') return { ok: false, error: oneLine(outer?.result ?? 'claude gave no result') }
 	return { ok: true, text: outer.result }
 }
@@ -55,6 +57,7 @@ export async function askClaudeWithFile(tools, cfg, { path, mime, prompt }) {
 	if (res.code !== 0) return { ok: false, error: oneLine(res.stderr || 'claude failed') }
 	for (const line of res.stdout.split('\n').reverse()) {
 		const row = parseJsonReply(line)
+		if (row?.type === 'result') recordClaudeResult(row, { chars: prompt.length })
 		if (row?.type === 'result') return row.is_error || typeof row.result !== 'string' ? { ok: false, error: oneLine(row.result ?? 'claude gave no result') } : { ok: true, text: row.result }
 	}
 	return { ok: false, error: 'claude gave no result' }
@@ -134,12 +137,21 @@ function mergeByHand(parts) {
 	}
 }
 
+const DEFAULT_SMALL_CHARS = 6000 // about 1,500 words: a reel caption, a short post
+
+/** Short text goes to `smallModel` when it is set (a cheaper model reads a caption as well); long text keeps `claudeModel`. */
+export function modelFor(cfg, chars) {
+	const limit = Number(cfg.smallChars) || DEFAULT_SMALL_CHARS
+	return cfg.smallModel && chars <= limit ? { ...cfg, claudeModel: cfg.smallModel } : cfg
+}
+
 /**
  * Claude reads the whole text. Too long for one call, it reads every chunk and the notes are merged.
  * { ok, value } only when every character was read; a chunk that fails makes the whole read fail,
  * because `full` promises that an AI read all of it.
  */
 export async function readWithClaude(tools, cfg, source, text) {
+	cfg = modelFor(cfg, text.length)
 	const validateOpts = { duration: source.duration }
 	const max = Number(process.env.MYIND_CHUNK_CHARS) || cfg.chunkChars || DEFAULT_CHUNK_CHARS
 	const chunks = chunkText(text, max)

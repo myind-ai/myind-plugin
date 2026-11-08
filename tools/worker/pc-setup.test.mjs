@@ -21,6 +21,40 @@ function fakeTool(w, name) {
 	return path
 }
 
+// A launchctl that behaves like the real one: `bootout` returns at once but the job takes two more `print`s to stop;
+// `bootstrap` fails (exit 5) while it is still there; `load -w` exits 0 and does nothing (what was seen 2026-11-09).
+function launchdLike(w) {
+	const path = join(w.bin, 'fake-launchd')
+	const state = join(w.fake, 'launchd.json')
+	writeFileSync(path, `#!/usr/bin/env node
+const fs = require('fs')
+const file = ${JSON.stringify(state)}
+const s = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { loaded: true, stopping: 0 }
+const [cmd] = process.argv.slice(2)
+fs.appendFileSync(${JSON.stringify(join(w.fake, 'launchctl.log'))}, JSON.stringify({ argv: process.argv.slice(2) }) + '\\n')
+let code = 0
+if (cmd === 'bootout') { if (s.loaded) { s.loaded = false; s.stopping = 2 } else code = 3 }
+else if (cmd === 'print') { if (s.stopping > 0) s.stopping--; else if (!s.loaded) code = 113 }
+else if (cmd === 'bootstrap') { if (s.loaded || s.stopping > 0) code = 5; else s.loaded = true }
+fs.writeFileSync(file, JSON.stringify(s))
+process.exit(code)
+`)
+	chmodSync(path, 0o755)
+	return { path, loaded: () => JSON.parse(readFileSync(state, 'utf8')).loaded }
+}
+
+test('install-service again while the worker runs waits for it to stop, then loads it and checks', (t) => {
+	const w = makeWorld(t)
+	w.setup()
+	const fake = launchdLike(w)
+	w.env.MYIND_LAUNCHCTL = fake.path
+	const res = w.worker('install-service', '--platform', 'darwin')
+	assert.equal(res.code, 0, res.all)
+	assert.equal(fake.loaded(), true, 'launchd has the worker after a reinstall')
+	const again = w.worker('install-reminder', '--platform', 'darwin')
+	assert.equal(again.code, 0, again.all)
+})
+
 test('the worker has one copy: in the plugin, with tools/worker holding only tests and the forwarder', () => {
 	const runtime = readdirSync(join(ROOT, 'tools', 'worker')).filter((n) => n.endsWith('.mjs') && !n.endsWith('.test.mjs'))
 	assert.deepEqual(runtime.sort(), ['myind-worker.mjs', 'test-helpers.mjs'])
@@ -125,7 +159,7 @@ test('launchd-plist only prints', (t) => {
 test('install-service on macOS writes a launch agent that runs a stable copy, and loads it; uninstall removes both', (t) => {
 	const w = makeWorld(t)
 	w.setup()
-	w.env.MYIND_LAUNCHCTL = fakeTool(w, 'launchctl')
+	w.env.MYIND_LAUNCHCTL = launchdLike(w).path
 	const res = w.worker('install-service', '--platform', 'darwin', '--every', '120')
 	assert.equal(res.code, 0, res.all)
 	const plist = join(w.home, 'Library', 'LaunchAgents', 'com.myind.worker.plist')
@@ -136,8 +170,9 @@ test('install-service on macOS writes a launch agent that runs a stable copy, an
 	assert.ok(body.includes(`<string>${copy}</string>`), 'runs the copy, not the plugin folder that moves on update')
 	assert.match(body, /<string>watch<\/string>\s*<string>--every<\/string>\s*<string>120<\/string>/)
 	const calls = w.log('launchctl').map((r) => r.argv)
-	assert.deepEqual(calls.map((a) => a[0]), ['bootout', 'bootstrap'])
-	assert.deepEqual(calls[1].slice(2), [plist])
+	const steps = calls.map((a) => a[0]).filter((c) => c !== 'print')
+	assert.deepEqual(steps, ['bootout', 'bootstrap'])
+	assert.deepEqual(calls.find((a) => a[0] === 'bootstrap').slice(2), [plist])
 
 	const off = w.worker('uninstall-service', '--platform', 'darwin')
 	assert.equal(off.code, 0, off.all)

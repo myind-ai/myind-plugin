@@ -73,7 +73,7 @@ if (argv[0] === 'api') {
   let m;
   if (argv.includes('--jq')) out(String(s.private));
   else if (/\\/releases$/.test(p)) out(page > 1 ? [] : s.releases.map((r) => ({ id: r.id, tag_name: r.tag })));
-  else if ((m = p.match(/\\/releases\\/tags\\/(.+)$/))) { const r = s.releases.find((x) => x.tag === m[1]); if (!r) process.exit(1); out({ id: r.id, tag_name: r.tag }) }
+  else if ((m = p.match(/\\/releases\\/tags\\/(.+)$/))) { const r = s.releases.find((x) => x.tag === m[1]); if (!r) process.exit(1); out({ id: r.id, tag_name: r.tag, assets: r.assets }) }
   else if ((m = p.match(/\\/releases\\/(\\d+)\\/assets$/))) out(page > 1 ? [] : s.releases.find((x) => x.id === Number(m[1])).assets);
   else process.exit(1);
 } else if (argv[0] === 'release' && argv[1] === 'create') { s.releases.push({ id: s.next++, tag: argv[2], assets: [] }); save() }

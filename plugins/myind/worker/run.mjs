@@ -5,6 +5,7 @@ import { BlobStore } from './blobs.mjs'
 import { commandFor, homeDir, loadConfig, loadState, resolveTools, saveState, takeLock } from './config.mjs'
 import { hasCommits, pullRebase, syncAndPush, unpushedCount } from './gitops.mjs'
 import { writeHeartbeat } from './heartbeat.mjs'
+import { maybeIndex } from './index.mjs'
 import { processJob } from './process.mjs'
 import { wordsJobs } from './words.mjs'
 import { lastLine, oneLine, run } from './util.mjs'
@@ -132,6 +133,8 @@ export async function runOnce(opts = {}, log = console.log) {
 				ctx.warn(`${left} commit(s) not pushed: ${pushed.error}`)
 			}
 		}
+		// A new phone reads one snapshot instead of every file (index.mjs); only of what the remote has.
+		if (summary.pushed) await maybeIndex(ctx, log)
 		log(`done ${summary.done} · kept ${summary.kept} · failed ${summary.failed} · left in inbox ${summary.skipped}${summary.waitingWords ? ` · waiting for your words ${summary.waitingWords} (myind-worker needs-words)` : ''}`)
 		return summary
 	} finally {
